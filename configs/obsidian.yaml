@@ -1,0 +1,17 @@
+# Preset: semantic search over an Obsidian vault (or any folder of markdown notes).
+# Point 'path' at your vault. Notes are chunked by ##/### headings;
+# notes without headings are indexed as a single chunk.
+
+ollama:
+  base_url: http://localhost:11434
+  embed_model: bge-m3
+  embed_timeout: 300
+
+index_dir: ~/.local-recall/index
+
+sources:
+  - path: ~/Documents/MyVault
+    pattern: "**/*.md"
+
+# No section_rules: all chunks get type "other".
+# Add rules if your notes use consistent headings (e.g. "## Ideas" -> idea).

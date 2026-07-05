@@ -1,0 +1,28 @@
+# Preset: give Claude Code long-term memory across sessions.
+# Indexes session logs saved by /save-session (everything-claude-code)
+# and Claude Code's auto-memory files. Adjust paths to your machine.
+
+ollama:
+  base_url: http://localhost:11434
+  embed_model: bge-m3
+  embed_timeout: 300
+
+index_dir: ~/.local-recall/index
+
+sources:
+  - path: ~/.claude/sessions
+    pattern: "*.tmp"
+  - path: ~/.claude/projects
+    pattern: "**/memory/*.md"
+
+# Session logs use structured headings; map them to filterable types
+# so the agent can ask for e.g. only past failures.
+section_rules:
+  - contains: "what worked"
+    type: worked
+  - contains: "what did not work"
+    type: failed
+  - contains: "decisions made"
+    type: decision
+  - contains: "blockers"
+    type: blocker

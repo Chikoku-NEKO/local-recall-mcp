@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# local index data (never commit embeddings of personal notes)
+index/
+memory_index/
+*.local.yaml
