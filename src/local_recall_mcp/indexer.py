@@ -14,6 +14,8 @@ from typing import Any, Awaitable, Callable
 import httpx
 import numpy as np
 
+from . import csv_source
+
 EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 SectionRule = tuple[str, str]  # (lowercase substring of a heading, section type)
 
@@ -81,6 +83,10 @@ def _file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _text_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def scan_sources(sources: list) -> dict[str, tuple[str, SourceSpec]]:
     """Map absolute path -> (SHA-256, source spec) for every matching file.
 
@@ -142,6 +148,13 @@ async def sync_index(
     if not changed and not removed:
         return stats
 
+    # Reuse embeddings of chunks whose text is unchanged (e.g. append-only CSVs):
+    # map old chunk-body hash -> its vector before anything is dropped.
+    old_vec_by_hash: dict[str, np.ndarray] = {}
+    if chunks and vectors.shape[0] == len(chunks):
+        for i, c in enumerate(chunks):
+            old_vec_by_hash.setdefault(_text_hash(c["content"]), vectors[i])
+
     drop = set(changed) | set(removed)
     keep = [i for i, c in enumerate(chunks) if c["path"] not in drop]
     chunks = [chunks[i] for i in keep]
@@ -149,13 +162,29 @@ async def sync_index(
 
     new_chunks: list[dict[str, Any]] = []
     for p in changed:
-        for c in chunk_file(Path(p), rules):
+        spec = current[p][1]
+        if spec.type == "csv":
+            file_chunks = csv_source.chunk_csv_file(
+                Path(p),
+                encoding=spec.encoding,
+                skip_rows=spec.skip_rows,
+                template=spec.template,
+            )
+        else:
+            file_chunks = chunk_file(Path(p), rules)
+        for c in file_chunks:
             c["path"] = p
             c["source"] = Path(p).name
             new_chunks.append(c)
     if new_chunks:
-        embs = await embed_fn([c["content"] for c in new_chunks])
-        new_vecs = np.asarray(embs, dtype=np.float32)
+        pending = [c for c in new_chunks if _text_hash(c["content"]) not in old_vec_by_hash]
+        embedded = iter(await embed_fn([c["content"] for c in pending]) if pending else [])
+        rows = [
+            old_vec_by_hash[h] if (h := _text_hash(c["content"])) in old_vec_by_hash
+            else np.asarray(next(embedded), dtype=np.float32)
+            for c in new_chunks
+        ]
+        new_vecs = np.vstack(rows).astype(np.float32)
         vectors = new_vecs if vectors.shape[0] == 0 else np.vstack([vectors, new_vecs])
         chunks.extend(new_chunks)
 
