@@ -87,6 +87,13 @@ def _text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _spec_fingerprint(spec: SourceSpec) -> str:
+    """Chunking-relevant spec fields, folded into the manifest hash so that
+    config changes (template, encoding, skip_rows) re-index affected files."""
+    raw = repr((spec.type, spec.encoding, spec.skip_rows, spec.template))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
 def scan_sources(sources: list) -> dict[str, tuple[str, SourceSpec]]:
     """Map absolute path -> (SHA-256, source spec) for every matching file.
 
@@ -100,7 +107,7 @@ def scan_sources(sources: list) -> dict[str, tuple[str, SourceSpec]]:
             if not p.is_file():
                 continue
             try:
-                result[str(p.resolve())] = (_file_hash(p), spec)
+                result[str(p.resolve())] = (f"{_file_hash(p)}:{_spec_fingerprint(spec)}", spec)
             except OSError:
                 continue
     return result

@@ -282,6 +282,17 @@ class TestCsvSyncAndEmbedReuse(unittest.TestCase):
         self.assertEqual(len(re_embedded), 1)  # Section A はベクトル再利用
         self.assertIn("Rewritten", re_embedded[0])
 
+    def test_template_change_reindexes_file(self):
+        (self.src / "b.csv").write_text(CSV_V1, encoding="utf-8")
+        asyncio.run(indexer.sync_index(self.index, [self.csv_spec], fake_embed))
+        new_spec = indexer.SourceSpec(
+            base=self.src, pattern="*.csv", type="csv", template="{item}={price}",
+        )
+        stats = asyncio.run(indexer.sync_index(self.index, [new_spec], fake_embed))
+        self.assertEqual(stats["added_or_updated"], 1)  # ファイル不変でもspec変更で再チャンク
+        chunks = json.loads((self.index / "chunks.json").read_text(encoding="utf-8"))
+        self.assertIn("apple=120", chunks[0]["content"])
+
     def test_mixed_md_and_csv_sources(self):
         (self.src / "a.md").write_text(LONG_A, encoding="utf-8")
         (self.src / "b.csv").write_text(CSV_V1, encoding="utf-8")
