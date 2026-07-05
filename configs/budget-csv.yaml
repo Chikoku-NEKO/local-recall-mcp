@@ -1,0 +1,22 @@
+# Preset: semantic search over credit-card / bank statement CSVs.
+# One transaction row = one searchable chunk. Ask your agent things like
+# "when did I start paying Anthropic?" or "what was that mystery charge?".
+
+ollama:
+  base_url: http://localhost:11434
+  embed_model: bge-m3
+  embed_timeout: 300
+
+index_dir: ~/.local-recall/index
+
+sources:
+  - path: ~/Documents/statements
+    pattern: "*.csv"
+    type: csv
+    encoding: cp932        # Japanese card statements are often Shift-JIS; use utf-8 otherwise
+    skip_rows: 4           # preamble lines before the header row (0 if the file starts with headers)
+    template: "{ご利用日} {ご利用店} {ご利用金額}円（{ご利用区分}）"
+
+# template is optional. Without it, each row is rendered generically as
+# "column: value | column: value" (same convention as LangChain's CSVLoader).
+# Search results can be narrowed with section_filter: "csv".

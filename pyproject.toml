@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "local-recall-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Fully local semantic memory for AI agents: search your notes and session logs from any MCP client, with embeddings served by Ollama"
 readme = "README.md"
 license = { text = "MIT" }
