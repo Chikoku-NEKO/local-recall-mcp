@@ -17,6 +17,13 @@ from . import indexer
 
 DEFAULT_CONFIG_PATH = Path.home() / ".local-recall" / "config.yaml"
 
+DEFAULT_TOOL_DESCRIPTION = (
+    "Semantic search over your local notes and session logs "
+    "(fully local: embeddings via Ollama, nothing leaves your machine). "
+    "Use it before design, implementation, or debugging work to recall "
+    "past decisions, solutions, and failure patterns."
+)
+
 SAMPLE_CONFIG = """\
 ollama:
   base_url: http://localhost:11434
@@ -28,6 +35,15 @@ index_dir: ~/.local-recall/index
 sources:
   - path: ~/notes
     pattern: "**/*.md"
+
+# CSV sources are searched row by row (one record = one chunk):
+# sources:
+#   - path: ~/Documents/statements
+#     pattern: "*.csv"
+#     type: csv
+#     encoding: cp932     # e.g. Japanese card statements
+#     skip_rows: 4        # preamble lines before the header row
+#     template: "{date} {store} {amount}"   # optional; default renders "column: value | ..."
 
 # Optional: map heading substrings to filterable section types.
 # section_rules:
@@ -44,11 +60,21 @@ def load_config(path: Path) -> dict[str, Any]:
     return cfg
 
 
-def parse_sources(cfg: dict[str, Any]) -> list[tuple[Path, str]]:
-    return [
-        (Path(str(s["path"])).expanduser(), str(s.get("pattern", "**/*.md")))
-        for s in cfg["sources"]
-    ]
+def parse_sources(cfg: dict[str, Any]) -> list[indexer.SourceSpec]:
+    specs = []
+    for s in cfg["sources"]:
+        stype = str(s.get("type", "text"))
+        if stype not in ("text", "csv"):
+            raise ValueError(f"Unknown source type '{stype}' (expected 'text' or 'csv')")
+        specs.append(indexer.SourceSpec(
+            base=Path(str(s["path"])).expanduser(),
+            pattern=str(s.get("pattern", "**/*.md" if stype == "text" else "*.csv")),
+            type=stype,
+            encoding=str(s.get("encoding", "utf-8")),
+            skip_rows=int(s.get("skip_rows", 0)),
+            template=(str(s["template"]) if s.get("template") else None),
+        ))
+    return specs
 
 
 def parse_rules(cfg: dict[str, Any]) -> list[indexer.SectionRule]:
@@ -56,6 +82,10 @@ def parse_rules(cfg: dict[str, Any]) -> list[indexer.SectionRule]:
     if raw is None:
         return indexer.DEFAULT_SECTION_RULES
     return [(str(r["contains"]).lower(), str(r["type"])) for r in raw]
+
+
+def resolve_tool_description(cfg: dict[str, Any]) -> str:
+    return str((cfg.get("tool") or {}).get("description") or DEFAULT_TOOL_DESCRIPTION)
 
 
 def build_server(cfg: dict[str, Any]) -> Server:
@@ -67,6 +97,9 @@ def build_server(cfg: dict[str, Any]) -> Server:
     sources = parse_sources(cfg)
     rules = parse_rules(cfg)
     section_types = sorted({stype for _, stype in rules})
+    if any(s.type == "csv" for s in sources):
+        section_types = sorted(set(section_types) | {"csv"})
+    tool_description = resolve_tool_description(cfg)
 
     server = Server("local-recall-mcp")
 
@@ -81,12 +114,7 @@ def build_server(cfg: dict[str, Any]) -> Server:
         return [
             types.Tool(
                 name="search_memory",
-                description=(
-                    "Semantic search over your local notes and session logs "
-                    "(fully local: embeddings via Ollama, nothing leaves your machine). "
-                    "Use it before design, implementation, or debugging work to recall "
-                    "past decisions, solutions, and failure patterns."
-                ),
+                description=tool_description,
                 inputSchema={
                     "type": "object",
                     "properties": {

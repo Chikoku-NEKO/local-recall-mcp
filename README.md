@@ -62,6 +62,7 @@ Ready-made configs in [`configs/`](configs/):
 | --- | --- |
 | [`claude-code.yaml`](configs/claude-code.yaml) | Claude Code session logs (`/save-session` output) and auto-memory files, with `worked` / `failed` / `decision` / `blocker` filters |
 | [`obsidian.yaml`](configs/obsidian.yaml) | An Obsidian vault (or any folder of markdown notes) |
+| [`budget-csv.yaml`](configs/budget-csv.yaml) | Credit-card / bank statement CSVs, one searchable chunk per transaction |
 
 Copy one to `~/.local-recall/config.yaml`, or point the server at it directly:
 
@@ -96,6 +97,35 @@ section_rules:                       # optional heading -> type mapping
 
 Files are chunked on `##`/`###` headings; files without headings become a single chunk. Each chunk gets a `section_type` from the first matching rule (`other` if none match), and the `search_memory` tool accepts a `section_filter` to narrow results to one type — the killer use case being *"only show me past failures before I try this again."*
 
+## CSV sources
+
+Any CSV becomes searchable row by row — bank statements, card statements,
+order-history exports. One record = one chunk, so *"when did I start paying
+Anthropic?"* finds the exact transaction.
+
+```yaml
+sources:
+  - path: ~/Documents/statements
+    pattern: "*.csv"
+    type: csv
+    encoding: cp932   # optional, default utf-8
+    skip_rows: 4      # optional, lines before the header row
+    template: "{date} {store} {amount}"   # optional
+```
+
+Without `template`, rows render as `column: value | column: value`. CSV chunks
+get `section_type: csv`, so `section_filter: "csv"` narrows results to
+transactions only.
+
+### Scale
+
+- Unchanged rows are never re-embedded: appending 50 rows to a 20k-row CSV
+  embeds only the 50 new rows (chunk-level embedding reuse).
+- Practical ceiling is roughly 50k chunks (~200 MB of vectors, sub-100ms
+  brute-force search). Beyond that, split your sources.
+- Aggregation ("total spent in May") is out of scope: semantic search recalls
+  records, it does not compute.
+
 ## How it works
 
 ```
@@ -117,10 +147,11 @@ Kept deliberately small — these are out of scope for v0.x:
 - Embedding providers other than Ollama (local-first is the point)
 - External vector databases (flat files comfortably handle tens of thousands of chunks)
 - Reranking or hybrid search (cosine similarity only)
-- Parsers beyond markdown/plain text (no PDF, no HTML)
+- Parsers beyond markdown/plain text/CSV (no PDF, no HTML, no xlsx, no JSON)
+- Aggregation over CSV data (recall, not arithmetic)
 - Any GUI
 
-If you need one of these, open an issue describing the use case — real demand is what would justify a v0.2.
+If you need one of these, open an issue describing the use case — real demand is what justifies scope.
 
 ## Development
 

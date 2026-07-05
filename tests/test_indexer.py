@@ -159,6 +159,13 @@ class TestSyncIndex(unittest.TestCase):
         expected = asyncio.run(fake_embed([chunks[0]["content"]]))[0]
         np.testing.assert_allclose(vectors[0], np.asarray(expected, dtype=np.float32), rtol=1e-5)
 
+    def test_sourcespec_sources_work(self):
+        (self.src / "a.md").write_text(LONG_A, encoding="utf-8")
+        spec_sources = [indexer.SourceSpec(base=self.src, pattern="*.md")]
+        stats = asyncio.run(indexer.sync_index(self.index, spec_sources, fake_embed))
+        self.assertEqual(stats["added_or_updated"], 1)
+        self.assertEqual(stats["total_chunks"], 1)
+
     def test_corrupted_vectors_triggers_full_rebuild(self):
         (self.src / "a.md").write_text(LONG_A, encoding="utf-8")
         self._sync()
@@ -214,6 +221,84 @@ class TestSearch(unittest.TestCase):
             sources=[(empty_src, "*.md")], embed_fn=fake_embed,
         ))
         self.assertIn("index is empty", result)
+
+
+def make_counting_embed():
+    """fake_embed wrapper that records every batch passed to it."""
+    calls: list[list[str]] = []
+
+    async def _embed(texts: list[str]) -> list[list[float]]:
+        calls.append(list(texts))
+        return await fake_embed(texts)
+
+    return _embed, calls
+
+
+CSV_V1 = "item,price\napple,120\nbanana,80\n"
+CSV_V2 = "item,price\napple,120\nbanana,80\ncherry,300\n"
+
+
+class TestCsvSyncAndEmbedReuse(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.src = Path(self.tmpdir.name) / "src"
+        self.src.mkdir()
+        self.index = Path(self.tmpdir.name) / "index"
+        self.csv_spec = indexer.SourceSpec(base=self.src, pattern="*.csv", type="csv")
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_csv_rows_become_chunks(self):
+        (self.src / "b.csv").write_text(CSV_V1, encoding="utf-8")
+        stats = asyncio.run(indexer.sync_index(self.index, [self.csv_spec], fake_embed))
+        self.assertEqual(stats["total_chunks"], 2)
+        chunks = json.loads((self.index / "chunks.json").read_text(encoding="utf-8"))
+        self.assertEqual({c["section_type"] for c in chunks}, {"csv"})
+
+    def test_append_embeds_only_new_rows(self):
+        (self.src / "b.csv").write_text(CSV_V1, encoding="utf-8")
+        embed, calls = make_counting_embed()
+        asyncio.run(indexer.sync_index(self.index, [self.csv_spec], embed))
+        self.assertEqual(sum(len(b) for b in calls), 2)  # 初回は全行
+        (self.src / "b.csv").write_text(CSV_V2, encoding="utf-8")
+        asyncio.run(indexer.sync_index(self.index, [self.csv_spec], embed))
+        appended = [t for b in calls[1:] for t in b]
+        self.assertEqual(len(appended), 1)  # 追記1行だけ埋め込み
+        self.assertIn("cherry", appended[0])
+        vectors = np.load(self.index / "vectors.npy")
+        self.assertEqual(vectors.shape[0], 3)
+
+    def test_md_edit_reuses_unchanged_sections(self):
+        (self.src / "a.md").write_text(LONG_A + "\n" + LONG_B, encoding="utf-8")
+        md_spec = indexer.SourceSpec(base=self.src, pattern="*.md")
+        embed, calls = make_counting_embed()
+        asyncio.run(indexer.sync_index(self.index, [md_spec], embed))
+        self.assertEqual(sum(len(b) for b in calls), 2)  # Section A + B
+        changed_b = "## Section B\n\n" + "Rewritten body of B for the reuse test. " * 5
+        (self.src / "a.md").write_text(LONG_A + "\n" + changed_b, encoding="utf-8")
+        asyncio.run(indexer.sync_index(self.index, [md_spec], embed))
+        re_embedded = [t for b in calls[1:] for t in b]
+        self.assertEqual(len(re_embedded), 1)  # Section A はベクトル再利用
+        self.assertIn("Rewritten", re_embedded[0])
+
+    def test_template_change_reindexes_file(self):
+        (self.src / "b.csv").write_text(CSV_V1, encoding="utf-8")
+        asyncio.run(indexer.sync_index(self.index, [self.csv_spec], fake_embed))
+        new_spec = indexer.SourceSpec(
+            base=self.src, pattern="*.csv", type="csv", template="{item}={price}",
+        )
+        stats = asyncio.run(indexer.sync_index(self.index, [new_spec], fake_embed))
+        self.assertEqual(stats["added_or_updated"], 1)  # ファイル不変でもspec変更で再チャンク
+        chunks = json.loads((self.index / "chunks.json").read_text(encoding="utf-8"))
+        self.assertIn("apple=120", chunks[0]["content"])
+
+    def test_mixed_md_and_csv_sources(self):
+        (self.src / "a.md").write_text(LONG_A, encoding="utf-8")
+        (self.src / "b.csv").write_text(CSV_V1, encoding="utf-8")
+        md_spec = indexer.SourceSpec(base=self.src, pattern="*.md")
+        stats = asyncio.run(indexer.sync_index(self.index, [md_spec, self.csv_spec], fake_embed))
+        self.assertEqual(stats["total_chunks"], 3)
 
 
 if __name__ == "__main__":
