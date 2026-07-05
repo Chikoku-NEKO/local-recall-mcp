@@ -159,6 +159,13 @@ class TestSyncIndex(unittest.TestCase):
         expected = asyncio.run(fake_embed([chunks[0]["content"]]))[0]
         np.testing.assert_allclose(vectors[0], np.asarray(expected, dtype=np.float32), rtol=1e-5)
 
+    def test_sourcespec_sources_work(self):
+        (self.src / "a.md").write_text(LONG_A, encoding="utf-8")
+        spec_sources = [indexer.SourceSpec(base=self.src, pattern="*.md")]
+        stats = asyncio.run(indexer.sync_index(self.index, spec_sources, fake_embed))
+        self.assertEqual(stats["added_or_updated"], 1)
+        self.assertEqual(stats["total_chunks"], 1)
+
     def test_corrupted_vectors_triggers_full_rebuild(self):
         (self.src / "a.md").write_text(LONG_A, encoding="utf-8")
         self._sync()

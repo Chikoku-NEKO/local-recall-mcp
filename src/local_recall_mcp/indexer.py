@@ -7,6 +7,7 @@ files (manifest.json, chunks.json, vectors.npy) — no external database.
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -15,6 +16,25 @@ import numpy as np
 
 EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 SectionRule = tuple[str, str]  # (lowercase substring of a heading, section type)
+
+@dataclass(frozen=True)
+class SourceSpec:
+    """One entry of the 'sources' config. type='csv' enables row-level chunking."""
+    base: Path
+    pattern: str
+    type: str = "text"          # "text" | "csv"
+    encoding: str = "utf-8"
+    skip_rows: int = 0          # lines to skip before the CSV header row
+    template: str | None = None # optional row-rendering template, e.g. "{date} {store} {amount}"
+
+
+def _normalize_sources(sources: list) -> list[SourceSpec]:
+    """Accept both SourceSpec and legacy (Path, pattern) tuples."""
+    return [
+        s if isinstance(s, SourceSpec) else SourceSpec(base=Path(s[0]), pattern=str(s[1]))
+        for s in sources
+    ]
+
 
 HEADER_PATTERN = re.compile(r"(?=^#{2,3} .+$)", re.MULTILINE)
 MIN_CHUNK_CHARS = 50
@@ -61,20 +81,20 @@ def _file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def scan_sources(sources: list[tuple[Path, str]]) -> dict[str, str]:
-    """Map absolute path -> SHA-256 for every matching file.
+def scan_sources(sources: list) -> dict[str, tuple[str, SourceSpec]]:
+    """Map absolute path -> (SHA-256, source spec) for every matching file.
 
     Unreadable files and missing directories are silently skipped.
     """
-    result: dict[str, str] = {}
-    for base, pattern in sources:
-        if not base.exists():
+    result: dict[str, tuple[str, SourceSpec]] = {}
+    for spec in _normalize_sources(sources):
+        if not spec.base.exists():
             continue
-        for p in sorted(base.glob(pattern)):
+        for p in sorted(spec.base.glob(spec.pattern)):
             if not p.is_file():
                 continue
             try:
-                result[str(p.resolve())] = _file_hash(p)
+                result[str(p.resolve())] = (_file_hash(p), spec)
             except OSError:
                 continue
     return result
@@ -115,8 +135,9 @@ async def sync_index(
         vectors = np.zeros((0, 0), dtype=np.float32)
 
     current = scan_sources(sources)
-    changed = [p for p, h in current.items() if manifest.get(p) != h]
-    removed = [p for p in manifest if p not in current]
+    current_hashes = {p: h for p, (h, _) in current.items()}
+    changed = [p for p, h in current_hashes.items() if manifest.get(p) != h]
+    removed = [p for p in manifest if p not in current_hashes]
     stats = {"added_or_updated": len(changed), "removed": len(removed), "total_chunks": len(chunks)}
     if not changed and not removed:
         return stats
@@ -138,7 +159,7 @@ async def sync_index(
         vectors = new_vecs if vectors.shape[0] == 0 else np.vstack([vectors, new_vecs])
         chunks.extend(new_chunks)
 
-    manifest_p.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
+    manifest_p.write_text(json.dumps(current_hashes, ensure_ascii=False), encoding="utf-8")
     chunks_p.write_text(json.dumps(chunks, ensure_ascii=False), encoding="utf-8")
     np.save(vectors_p, vectors if vectors.shape[0] else np.zeros((0, 0), dtype=np.float32))
     stats["total_chunks"] = len(chunks)
